@@ -1,0 +1,23 @@
+{
+  "name": "c3-agnos-logo-tool-mobile",
+  "version": "1.0.0",
+  "description": "C3 AGNOS 启动图工具 手机版 (Capacitor + Vue3)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "cap:sync": "cap sync android",
+    "cap:open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "fflate": "^0.8.2",
+    "vue": "^3.4.31"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2",
+    "@vitejs/plugin-vue": "^5.0.5",
+    "vite": "^5.3.3"
+  }
+}
