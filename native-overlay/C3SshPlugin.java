@@ -9,22 +9,27 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.io.ByteArrayInputStream;
-import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
 import java.io.OutputStream;
-import java.security.KeyPair;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.util.EnumSet;
 import java.util.concurrent.TimeUnit;
 
 import net.schmizz.sshj.SSHClient;
 import net.schmizz.sshj.common.IOUtils;
+import net.schmizz.sshj.sftp.OpenMode;
+import net.schmizz.sshj.sftp.RemoteFile;
 import net.schmizz.sshj.sftp.SFTPClient;
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
-import net.schmizz.sshj.userauth.keyprovider.OpenSSHKeyFile;
-import net.schmizz.sshj.userauth.keyprovider.PuTTYKeyFile;
+import net.schmizz.sshj.userauth.keyprovider.KeyProvider;
 import net.schmizz.sshj.userauth.password.PasswordUtils;
 import net.schmizz.sshj.connection.channel.direct.Session;
 
 /**
  * C3 AGNOS 原生 SSH/SFTP 插件
+ * 精准匹配 SSHJ 0.38 API
  */
 @CapacitorPlugin(name = "C3Ssh")
 public class C3SshPlugin extends Plugin {
@@ -48,29 +53,42 @@ public class C3SshPlugin extends Plugin {
                 client.connect(host, port);
 
                 boolean authed = false;
+
+                // 1) 私钥认证：写临时文件，让 SSHJ 自动识别 OpenSSH / PPK
                 if (privateKeyContent != null && !privateKeyContent.isEmpty()) {
-                    char[] pass = (passphrase != null && !passphrase.isEmpty())
-                            ? passphrase.toCharArray() : null;
+                    File tmp = null;
                     try {
-                        KeyPair kp = parseKey(privateKeyContent, pass);
+                        tmp = File.createTempFile("c3key", ".tmp", getContext().getCacheDir());
+                        try (FileOutputStream fos = new FileOutputStream(tmp)) {
+                            fos.write(privateKeyContent.getBytes("UTF-8"));
+                        }
+                        KeyProvider kp;
+                        if (passphrase != null && !passphrase.isEmpty()) {
+                            kp = client.loadKeys(tmp.getAbsolutePath(), passphrase.toCharArray());
+                        } else {
+                            kp = client.loadKeys(tmp.getAbsolutePath());
+                        }
                         client.authPublickey(username, kp);
                         authed = true;
                     } catch (Exception keyErr) {
-                        if (password != null && !password.isEmpty()) {
-                            client.authPassword(username, password);
-                            authed = true;
-                        } else {
+                        // 密钥失败，尝试回退密码
+                        if (password == null || password.isEmpty()) {
                             throw keyErr;
                         }
+                    } finally {
+                        if (tmp != null) tmp.delete();
                     }
-                } else if (password != null && !password.isEmpty()) {
+                }
+
+                // 2) 密码认证
+                if (!authed && password != null && !password.isEmpty()) {
                     client.authPassword(username, password);
                     authed = true;
                 }
 
                 if (!authed) {
                     client.close();
-                    call.reject("未提供有效的认证方式（密码或密钥）");
+                    call.reject("认证失败：请检查密码或密钥");
                     return;
                 }
 
@@ -83,20 +101,6 @@ public class C3SshPlugin extends Plugin {
                 call.reject("SSH 连接失败: " + e.getMessage());
             }
         }).start();
-    }
-
-    private KeyPair parseKey(String content, char[] passphrase) throws Exception {
-        if (content.contains("PuTTY-User-Key-File")) {
-            PuTTYKeyFile ppk = new PuTTYKeyFile();
-            InputStream is = new ByteArrayInputStream(content.getBytes("UTF-8"));
-            ppk.init(is, PasswordUtils.createOneOff(passphrase));
-            return ppk.getKeyPair();
-        } else {
-            OpenSSHKeyFile openssh = new OpenSSHKeyFile();
-            InputStream is = new ByteArrayInputStream(content.getBytes("UTF-8"));
-            openssh.init(is, PasswordUtils.createOneOff(passphrase));
-            return openssh.getKeyPair();
-        }
     }
 
     @PluginMethod
@@ -137,10 +141,8 @@ public class C3SshPlugin extends Plugin {
             try {
                 byte[] data = Base64.decode(dataB64, Base64.DEFAULT);
                 sftp = ssh.newSFTPClient();
-                try (OutputStream os = sftp.open(remotePath).new OutputStream()) {
-                    os.write(data);
-                    os.flush();
-                }
+                sftp.put(new java.io.ByteArrayInputStream(data), remotePath);
+
                 JSObject ret = new JSObject();
                 ret.put("success", true);
                 ret.put("bytes", data.length);
