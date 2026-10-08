@@ -45,7 +45,7 @@ jobs:
           cp native-overlay/C3SshPlugin.java "$PKG_DIR/C3SshPlugin.java"
           cp native-overlay/MainActivity.java "$PKG_DIR/MainActivity.java"
 
-      # 注入 SSHJ 依赖
+      # 注入 SSHJ 依赖 + 排除重复 META-INF
       - name: 注入 SSHJ 依赖
         run: |
           python3 - <<'PY'
@@ -60,8 +60,27 @@ jobs:
               implementation 'net.i2p.crypto:eddsa:0.3.0'
           """
           s = re.sub(r'(dependencies\s*\{)', r'\1' + deps, s, count=1)
+
+          # 排除重复的 META-INF 文件（SSHJ/BouncyCastle 会冲突）
+          pack = """
+              packagingOptions {
+                  resources {
+                      excludes += ['META-INF/versions/9/OSGI-INF/MANIFEST.MF',
+                                    'META-INF/DEPENDENCIES',
+                                    'META-INF/LICENSE*',
+                                    'META-INF/NOTICE*',
+                                    'META-INF/*.SF',
+                                    'META-INF/*.DSA',
+                                    'META-INF/*.RSA',
+                                    'META-INF/INDEX.LIST']
+                      pickFirsts += ['META-INF/versions/9/OSGI-INF/MANIFEST.MF']
+                  }
+              }
+          """
+          # 插入到 android {} 块内（在 defaultConfig 前）
+          s = re.sub(r'(\n\s*defaultConfig\s*\{)', pack + r'\1', s, count=1)
           open(p, 'w', encoding='utf-8').write(s)
-          print("SSHJ 依赖注入完成")
+          print("SSHJ 依赖 + packagingOptions 注入完成")
           PY
 
       # 注入网络/存储权限
