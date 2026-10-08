@@ -140,8 +140,14 @@ public class C3SshPlugin extends Plugin {
             SFTPClient sftp = null;
             try {
                 byte[] data = Base64.decode(dataB64, Base64.DEFAULT);
+                // 先写本地临时文件，再上传（兼容 SSHJ 0.38 的 put API）
+                File tmp = File.createTempFile("c3up", ".tmp", getContext().getCacheDir());
+                try (FileOutputStream fos = new FileOutputStream(tmp)) {
+                    fos.write(data);
+                }
                 sftp = ssh.newSFTPClient();
-                sftp.put(new java.io.ByteArrayInputStream(data), remotePath);
+                sftp.put(tmp.getAbsolutePath(), remotePath);
+                tmp.delete();
 
                 JSObject ret = new JSObject();
                 ret.put("success", true);
