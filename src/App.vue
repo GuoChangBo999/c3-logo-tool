@@ -11,8 +11,46 @@
       <div class="row"><label>IP</label><input v-model="ssh.host" placeholder="192.168.0.34" /></div>
       <div class="row"><label>端口</label><input v-model="ssh.port" placeholder="22" /></div>
       <div class="row"><label>用户</label><input v-model="ssh.username" placeholder="comma" /></div>
-      <div class="row"><label>密码</label><input v-model="ssh.password" type="password" placeholder="(密码认证, 可留空走密钥)" /></div>
-      <p class="hint">支持密码认证；密钥/PPK 认证在 App 内选择文件。</p>
+
+      <div class="row">
+        <label>认证</label>
+        <select v-model="ssh.authType">
+          <option value="password">密码认证</option>
+          <option value="key">密钥认证（.ppk / OpenSSH）</option>
+        </select>
+      </div>
+
+      <!-- 密码认证 -->
+      <div class="row" v-if="ssh.authType === 'password'">
+        <label>密码</label>
+        <input v-model="ssh.password" type="password" placeholder="SSH 密码" />
+      </div>
+
+      <!-- 密钥认证 -->
+      <template v-if="ssh.authType === 'key'">
+        <div class="row">
+          <label>密钥</label>
+          <button class="file-btn" type="button" @click="$refs.keyInput.click()">
+            {{ keyFileName ? '重新选择' : '选择密钥文件' }}
+          </button>
+          <input ref="keyInput" type="file" style="display:none"
+                 accept=".ppk,.pem,.key,.txt,*/*" @change="onPickKey" />
+        </div>
+        <div class="row" v-if="keyFileName">
+          <label></label>
+          <span class="key-name">📄 {{ keyFileName }} ({{ keySize }} 字节)</span>
+        </div>
+        <div class="row">
+          <label>口令</label>
+          <input v-model="ssh.passphrase" type="password"
+                 placeholder="私钥口令（未加密则留空）" />
+        </div>
+      </template>
+
+      <p class="hint">
+        支持密码认证，或 PuTTY <code>.ppk</code> / OpenSSH 私钥认证。
+        密钥只在本机内存中使用，不会上传。
+      </p>
     </section>
 
     <!-- 图片选择 -->
@@ -72,7 +110,15 @@ import {
 import { generateRestorePack } from './engines/packEngine.js';
 import { connectSsh, execSshCommand, uploadBytes } from './bridge.js';
 
-const ssh = reactive({ host: '192.168.0.34', port: '22', username: 'comma', password: '' });
+const ssh = reactive({
+  host: '192.168.0.34', port: '22', username: 'comma',
+  authType: 'password',
+  password: '',
+  privateKey: '',   // 私钥文件内容
+  passphrase: '',   // 私钥口令
+});
+const keyFileName = ref('');
+const keySize = ref(0);
 const fitMode = ref('contain');
 const busy = ref(false);
 const log = ref('');
@@ -88,6 +134,46 @@ function onPick(e, which) {
   const reader = new FileReader();
   reader.onload = () => { preview[which] = reader.result; };
   reader.readAsDataURL(f);
+}
+
+/** 选择私钥文件（.ppk / OpenSSH），读取为文本内容 */
+function onPickKey(e) {
+  const f = e.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    ssh.privateKey = String(reader.result || '');
+    keyFileName.value = f.name;
+    keySize.value = f.size;
+    println(`🔑 已载入密钥: ${f.name} (${f.size} 字节)`);
+  };
+  reader.onerror = () => println('❌ 密钥文件读取失败');
+  reader.readAsText(f);
+}
+
+/** 组装传给原生插件的连接参数 */
+function sshParams() {
+  const p = {
+    host: ssh.host, port: ssh.port, username: ssh.username,
+    password: '', privateKey: '', passphrase: '',
+  };
+  if (ssh.authType === 'password') {
+    p.password = ssh.password;
+  } else {
+    p.privateKey = ssh.privateKey;
+    p.passphrase = ssh.passphrase;
+  }
+  return p;
+}
+
+/** 连接前校验 */
+function checkSshInput() {
+  if (ssh.authType === 'key' && !ssh.privateKey) {
+    throw new Error('请先选择密钥文件');
+  }
+  if (ssh.authType === 'password' && !ssh.password) {
+    throw new Error('请输入 SSH 密码');
+  }
 }
 
 /** 把 File 读成 HTMLImageElement */
@@ -157,8 +243,9 @@ async function doExportPack() {
 async function doTest() {
   busy.value = true; log.value = '';
   try {
-    println(`🔌 连接 ${ssh.host}:${ssh.port} ...`);
-    await connectSsh(ssh);
+    checkSshInput();
+    println(`🔌 连接 ${ssh.host}:${ssh.port} (${ssh.authType === 'key' ? '密钥' : '密码'}认证) ...`);
+    await connectSsh(sshParams());
     const out = await execSshCommand('ls -la /dev/disk/by-partlabel/splash && echo OK');
     println(out);
     println('✅ 设备可用');
@@ -169,9 +256,10 @@ async function doTest() {
 async function doFlash() {
   busy.value = true; log.value = '';
   try {
+    checkSshInput();
     const { splashBuffer, bgBuffer } = await buildImages();
     println('🔑 连接 SSH...');
-    await connectSsh(ssh);
+    await connectSsh(sshParams());
     println('📦 备份原厂图...');
     await execSshCommand('mkdir -p /data/agnos_logo_tool/backup');
     if (splashBuffer) {
@@ -208,6 +296,10 @@ body { margin: 0; background: #090d16; color: #e6edf3;
 .row input, .row select { flex: 1; background: #070b12; border: 1px solid #263042;
   color: #e6edf3; border-radius: 8px; padding: 9px 10px; font-size: 14px; min-width: 0; }
 .hint { color: #6e7681; font-size: 12px; margin: 4px 0 0; }
+.hint code { background: #16202e; padding: 1px 5px; border-radius: 4px; color: #79c0ff; }
+.file-btn { flex: 1; background: #1f6feb; border: 1px solid #1f6feb; color: #fff;
+  border-radius: 8px; padding: 9px 10px; font-size: 14px; cursor: pointer; }
+.key-name { flex: 1; color: #7ee787; font-size: 13px; word-break: break-all; }
 .preview { margin-top: 10px; }
 .preview p { font-size: 13px; color: #8b949e; margin: 6px 0; }
 .preview img { max-width: 100%; max-height: 260px; border-radius: 8px; border: 1px solid #263042; }

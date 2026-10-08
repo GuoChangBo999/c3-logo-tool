@@ -6,14 +6,25 @@ import { registerPlugin } from '@capacitor/core';
 
 const C3Ssh = registerPlugin('C3Ssh');
 
-/** 建立 SSH 连接 */
-export async function connectSsh({ host, port, username, password }) {
-  return C3Ssh.connect({
+/** 建立 SSH 连接
+ * @param {object} opts
+ * @param {string} opts.host
+ * @param {string|number} opts.port
+ * @param {string} opts.username
+ * @param {string} [opts.password]      密码认证
+ * @param {string} [opts.privateKey]    私钥文件内容（OpenSSH 或 PuTTY .ppk）
+ * @param {string} [opts.passphrase]    私钥口令（加密私钥才需要）
+ */
+export async function connectSsh({ host, port, username, password, privateKey, passphrase }) {
+  const payload = {
     host: (host || '').trim(),
     port: parseInt(port || '22', 10),
     username: (username || 'comma').trim(),
     password: password || '',
-  });
+  };
+  if (privateKey && String(privateKey).trim()) payload.privateKey = String(privateKey);
+  if (passphrase && String(passphrase).length) payload.passphrase = String(passphrase);
+  return C3Ssh.connect(payload);
 }
 
 /** 断开连接 */
