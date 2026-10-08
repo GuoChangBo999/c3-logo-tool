@@ -25,6 +25,7 @@ import net.schmizz.sshj.sftp.OpenMode;
 import net.schmizz.sshj.sftp.RemoteFile;
 import net.schmizz.sshj.sftp.SFTPClient;
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
+import net.schmizz.sshj.transport.kex.ECDHNistP;
 import net.schmizz.sshj.transport.kex.DHGexSHA1;
 import net.schmizz.sshj.transport.kex.DHGexSHA256;
 import net.schmizz.sshj.transport.kex.KeyExchange;
@@ -53,11 +54,21 @@ public class C3SshPlugin extends Plugin {
 
         new Thread(() -> {
             try {
-                // 关键修复：SSHJ 在 Android 上，BouncyCastle provider 缺 X25519 / EC 算法，
-                // 使用 curve25519 或 ecdh 都会报 "no such algorithm: ... for provider BC"。
-                // 这里只用纯 DH（大整数取模）密钥交换，完全不依赖 EC / X25519。
+                // 关键修复：显式注册完整的 BouncyCastle provider，
+                // 否则 SSHJ 在 Android 上会缺 SHA-256 / EC / X25519 等算法。
+                try {
+                    net.schmizz.sshj.common.SecurityUtils
+                        .registerSecurityProvider("org.bouncycastle.jce.provider.BouncyCastleProvider");
+                } catch (Throwable bcErr) {
+                    // 忽略，尝试其他方式
+                }
+
+                // 构造 DefaultConfig，指定 KEX 列表（ECDH + 纯 DH，尽量兼容）
                 DefaultConfig cfg = new DefaultConfig();
                 java.util.List<Factory.Named<KeyExchange>> kexList = new java.util.ArrayList<>();
+                kexList.add(new ECDHNistP.Factory256());   // ecdh-sha2-nistp256
+                kexList.add(new ECDHNistP.Factory384());   // ecdh-sha2-nistp384
+                kexList.add(new ECDHNistP.Factory521());   // ecdh-sha2-nistp521
                 kexList.add(new DHGexSHA256.Factory());    // diffie-hellman-group-exchange-sha256
                 kexList.add(new DHGexSHA1.Factory());      // diffie-hellman-group-exchange-sha1
                 kexList.add(DHGroups.Group14SHA256());     // diffie-hellman-group14-sha256
