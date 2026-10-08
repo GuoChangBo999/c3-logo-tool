@@ -18,11 +18,17 @@ import java.util.EnumSet;
 import java.util.concurrent.TimeUnit;
 
 import net.schmizz.sshj.SSHClient;
+import net.schmizz.sshj.common.Factory;
 import net.schmizz.sshj.common.IOUtils;
 import net.schmizz.sshj.sftp.OpenMode;
 import net.schmizz.sshj.sftp.RemoteFile;
 import net.schmizz.sshj.sftp.SFTPClient;
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
+import net.schmizz.sshj.transport.kex.ECDHNistP;
+import net.schmizz.sshj.transport.kex.DHGexSHA1;
+import net.schmizz.sshj.transport.kex.DHGexSHA256;
+import net.schmizz.sshj.transport.kex.KeyExchange;
+import com.hierynomus.sshj.transport.kex.DHGroups;
 import net.schmizz.sshj.userauth.keyprovider.KeyProvider;
 import net.schmizz.sshj.userauth.password.PasswordUtils;
 import net.schmizz.sshj.connection.channel.direct.Session;
@@ -50,6 +56,26 @@ public class C3SshPlugin extends Plugin {
                 SSHClient client = new SSHClient();
                 client.addHostKeyVerifier(new PromiscuousVerifier());
                 client.setConnectTimeout(8000);
+
+                // 关键修复：SSHJ 0.38 默认 KEX 列表首项是 Curve25519SHA256，
+                // 它依赖 BouncyCastle 的 X25519，在 Android 上缺该算法，
+                // 报错 "no such algorithm: X25519 for provider BC"。
+                // 这里显式指定 KEX 列表，移除所有 Curve25519 项，仅保留 ECDH + DH。
+                try {
+                    java.util.List<Factory.Named<KeyExchange>> kexList = new java.util.ArrayList<>();
+                    kexList.add(new ECDHNistP.Factory256());   // ecdh-sha2-nistp256
+                    kexList.add(new ECDHNistP.Factory384());   // ecdh-sha2-nistp384
+                    kexList.add(new ECDHNistP.Factory521());   // ecdh-sha2-nistp521
+                    kexList.add(new DHGexSHA256.Factory());    // diffie-hellman-group-exchange-sha256
+                    kexList.add(new DHGexSHA1.Factory());      // diffie-hellman-group-exchange-sha1
+                    kexList.add(DHGroups.Group14SHA256());     // diffie-hellman-group14-sha256
+                    kexList.add(DHGroups.Group14SHA1());       // diffie-hellman-group14-sha1
+                    kexList.add(DHGroups.Group1SHA1());        // diffie-hellman-group1-sha1
+                    client.setKeyExchangeFactories(kexList);
+                } catch (Throwable kexErr) {
+                    // 忽略，使用默认列表
+                }
+
                 client.connect(host, port);
 
                 boolean authed = false;
