@@ -44,7 +44,6 @@ jobs:
           mkdir -p "$PKG_DIR"
           cp native-overlay/C3SshPlugin.java "$PKG_DIR/C3SshPlugin.java"
           cp native-overlay/MainActivity.java "$PKG_DIR/MainActivity.java"
-          cp native-overlay/FullBCProvider.java "$PKG_DIR/FullBCProvider.java"
 
       # 注入 SSHJ 依赖 + 排除重复 META-INF
       - name: 注入 SSHJ 依赖
