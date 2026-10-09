@@ -54,13 +54,18 @@ public class C3SshPlugin extends Plugin {
 
         new Thread(() -> {
             try {
-                // 关键修复：显式注册完整的 BouncyCastle provider，
-                // 否则 SSHJ 在 Android 上会缺 SHA-256 / EC / X25519 等算法。
+                // 关键修复：Android 系统自带一个残缺的 "BC" provider（无 EC/X25519），
+                // Security.addProvider 因同名被跳过，SSHJ 一直用到残缺版 → no such algorithm: EC。
+                // 方案：注册一个改名的完整 BouncyCastle（"BCFULL"），并强制 SSHJ 使用它。
                 try {
                     net.schmizz.sshj.common.SecurityUtils
-                        .registerSecurityProvider("org.bouncycastle.jce.provider.BouncyCastleProvider");
+                        .registerSecurityProvider("com.openpilot.c3logo.FullBCProvider");
+                    net.schmizz.sshj.common.SecurityUtils.setSecurityProvider("BCFULL");
                 } catch (Throwable bcErr) {
-                    // 忽略，尝试其他方式
+                    try {
+                        net.schmizz.sshj.common.SecurityUtils
+                            .registerSecurityProvider("org.bouncycastle.jce.provider.BouncyCastleProvider");
+                    } catch (Throwable ignored) {}
                 }
 
                 // 构造 DefaultConfig，指定 KEX 列表（ECDH + 纯 DH，尽量兼容）
