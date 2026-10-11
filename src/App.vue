@@ -91,9 +91,41 @@
       </div>
     </section>
 
+    <!-- 还原 / 备份 -->
+    <section class="card">
+      <h2>④ 还原 / 备份</h2>
+
+      <!-- 还原恢复包 -->
+      <div class="row">
+        <label>恢复包</label>
+        <button class="file-btn" type="button" @click="$refs.packInput.click()">
+          {{ packFileName ? '重新选择' : '选择 .tar.gz 恢复包' }}
+        </button>
+        <input ref="packInput" type="file" style="display:none"
+               accept=".gz,.tar.gz,application/gzip,*/*" @change="onPickPack" />
+      </div>
+      <div class="row" v-if="packFileName">
+        <label></label>
+        <span class="key-name">📦 {{ packFileName }} ({{ packSize }} 字节)</span>
+      </div>
+
+      <div class="btns" style="margin-top:6px">
+        <button :disabled="busy" @click="doRestorePack">♻️ 还原恢复包（自定义图）</button>
+        <button :disabled="busy" @click="doRestoreFactory">🏭 还原原厂备份</button>
+        <button :disabled="busy" @click="doDownloadBackup" style="grid-column: span 2">
+          ⬇️ 下载原厂备份到手机（保命）
+        </button>
+      </div>
+      <p class="hint">
+        「还原恢复包」把选中的 .tar.gz 上传到设备解压并刷入；
+        「还原原厂备份」把设备上 <code>/data/agnos_logo_tool/backup/</code> 的原厂图刷回去；
+        「下载原厂备份」把原厂图下载到手机保存。
+      </p>
+    </section>
+
     <!-- 日志 -->
     <section class="card">
-      <h2>④ 日志</h2>
+      <h2>⑤ 日志</h2>
       <pre class="log">{{ log }}</pre>
     </section>
 
@@ -108,7 +140,15 @@ import {
   SPLASH_IMG_SIZE, BMP_EXACT_SIZE,
 } from './engines/bmpEngine.js';
 import { generateRestorePack } from './engines/packEngine.js';
-import { connectSsh, execSshCommand, uploadBytes } from './bridge.js';
+import { connectSsh, execSshCommand, uploadBytes, readRemoteFileBase64 } from './bridge.js';
+
+/** base64 字符串 -> Uint8Array */
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
 
 const ssh = reactive({
   host: '192.168.0.34', port: '22', username: 'comma',
@@ -119,6 +159,8 @@ const ssh = reactive({
 });
 const keyFileName = ref('');
 const keySize = ref(0);
+const packFileName = ref('');
+const packSize = ref(0);
 const fitMode = ref('contain');
 const busy = ref(false);
 const log = ref('');
@@ -276,6 +318,96 @@ async function doFlash() {
     await uploadBytes(new TextEncoder().encode(script), '/data/agnos_logo_tool/install_logo.sh');
     await execSshCommand('sudo chmod +x /data/agnos_logo_tool/install_logo.sh && sudo sh /data/agnos_logo_tool/install_logo.sh');
     println('🎉 刷入指令已下发，设备将重启！');
+  } catch (e) { println('❌ ' + e.message); }
+  finally { busy.value = false; }
+}
+
+/** 选择恢复包 .tar.gz */
+function onPickPack(e) {
+  const f = e.target.files[0];
+  if (!f) return;
+  pendingPackFile = f;
+  packFileName.value = f.name;
+  packSize.value = f.size;
+  println(`📦 已选择恢复包: ${f.name} (${f.size} 字节)`);
+}
+let pendingPackFile = null;
+
+/** 还原自定义图：上传恢复包 -> 解压 -> 执行安装脚本 */
+async function doRestorePack() {
+  if (!pendingPackFile) { println('❌ 请先选择 .tar.gz 恢复包'); return; }
+  busy.value = true; log.value = '';
+  try {
+    checkSshInput();
+    println('📖 读取恢复包...');
+    const buf = new Uint8Array(await pendingPackFile.arrayBuffer());
+    println(`  └─ ${buf.length} 字节`);
+    println('🔑 连接 SSH...');
+    await connectSsh(sshParams());
+    println('📤 上传恢复包到 /data ...');
+    await uploadBytes(buf, '/data/agnos_c3_logo_restore_pack.tar.gz');
+    println('📦 解压...');
+    await execSshCommand('cd /data && rm -rf agnos_c3_logo_restore_pack && tar -xzf agnos_c3_logo_restore_pack.tar.gz');
+    const ls = await execSshCommand('ls -la /data/agnos_c3_logo_restore_pack');
+    println(ls);
+    println('⚡ 执行还原脚本...');
+    await execSshCommand('cd /data/agnos_c3_logo_restore_pack && sudo chmod +x install_logo.sh && sudo sh install_logo.sh');
+    println('🎉 还原指令已下发，设备将重启！');
+  } catch (e) { println('❌ ' + e.message); }
+  finally { busy.value = false; }
+}
+
+/** 还原原厂备份：把设备 backup 目录里保存的原厂图刷回去 */
+async function doRestoreFactory() {
+  busy.value = true; log.value = '';
+  try {
+    checkSshInput();
+    println('🔑 连接 SSH...');
+    await connectSsh(sshParams());
+    println('🔍 检查原厂备份是否存在...');
+    const chk = await execSshCommand(
+      'ls -la /data/agnos_logo_tool/backup/ 2>/dev/null || echo "NO_BACKUP"');
+    println(chk);
+    if (chk.includes('NO_BACKUP') || chk.includes('No such file')) {
+      throw new Error('设备上没有原厂备份，无法还原');
+    }
+    const confirmCmd =
+      'cd /data/agnos_logo_tool/backup && ' +
+      'if [ -f splash_backup.img ]; then sudo dd if=splash_backup.img of=/dev/disk/by-partlabel/splash bs=1M && echo SPLASH_OK; fi; ' +
+      'if [ -f bg_backup.jpg ]; then sudo cp bg_backup.jpg /usr/comma/bg.jpg && echo BG_OK; fi; ' +
+      'sudo sync && echo SYNC_OK';
+    println('♻️ 正在还原原厂图...');
+    const out = await execSshCommand(confirmCmd);
+    println(out);
+    println('🎉 原厂图已还原，正在重启...');
+    await execSshCommand('sudo reboot').catch(() => {});
+  } catch (e) { println('❌ ' + e.message); }
+  finally { busy.value = false; }
+}
+
+/** 下载原厂备份到手机（保命） */
+async function doDownloadBackup() {
+  busy.value = true; log.value = '';
+  try {
+    checkSshInput();
+    println('🔑 连接 SSH...');
+    await connectSsh(sshParams());
+    println('🔍 检查原厂备份...');
+    const chk = await execSshCommand(
+      'ls -la /data/agnos_logo_tool/backup/ 2>/dev/null || echo "NO_BACKUP"');
+    println(chk);
+    if (chk.includes('NO_BACKUP') || chk.includes('No such file')) {
+      throw new Error('设备上没有原厂备份。请先执行一次「一键刷入」以自动生成备份。');
+    }
+    println('📥 打包备份...');
+    await execSshCommand(
+      'cd /data/agnos_logo_tool && tar -czf /data/agnos_backup_export.tar.gz backup && ls -la /data/agnos_backup_export.tar.gz');
+    println('📤 下载到手机...');
+    // 读取远端文件为 base64 再落盘
+    const b64 = await readRemoteFileBase64('/data/agnos_backup_export.tar.gz');
+    const bin = base64ToBytes(b64);
+    saveBlob(new Blob([bin], { type: 'application/gzip' }), 'agnos_原厂备份.tar.gz');
+    println(`✅ 已下载 agnos_原厂备份.tar.gz (${bin.length} 字节)，检查手机下载目录`);
   } catch (e) { println('❌ ' + e.message); }
   finally { busy.value = false; }
 }

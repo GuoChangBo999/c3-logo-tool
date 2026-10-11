@@ -46,6 +46,13 @@ export async function uploadBytes(bytes, remotePath) {
   return C3Ssh.upload({ remotePath, data: b64 });
 }
 
+/** 从远程路径读取文件，返回 base64 字符串 */
+export async function readRemoteFileBase64(remotePath) {
+  const res = await C3Ssh.download({ remotePath });
+  if (res && res.data) return res.data;
+  throw new Error('下载失败：未返回数据');
+}
+
 function bytesToBase64(bytes) {
   const CHUNK = 0x8000;
   let binary = '';

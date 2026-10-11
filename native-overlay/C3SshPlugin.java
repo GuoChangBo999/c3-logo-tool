@@ -192,6 +192,46 @@ public class C3SshPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void download(PluginCall call) {
+        final String remotePath = call.getString("remotePath", "");
+        if (ssh == null || !ssh.isConnected()) {
+            call.reject("SSH 尚未连接");
+            return;
+        }
+        new Thread(() -> {
+            SFTPClient sftp = null;
+            File tmp = null;
+            try {
+                tmp = File.createTempFile("c3dl", ".tmp", getContext().getCacheDir());
+                sftp = ssh.newSFTPClient();
+                sftp.get(remotePath, tmp.getAbsolutePath());
+
+                byte[] data = new byte[(int) tmp.length()];
+                try (java.io.FileInputStream fis = new java.io.FileInputStream(tmp)) {
+                    int off = 0, r;
+                    while (off < data.length && (r = fis.read(data, off, data.length - off)) > 0) {
+                        off += r;
+                    }
+                }
+                String b64 = Base64.encodeToString(data, Base64.NO_WRAP);
+
+                JSObject ret = new JSObject();
+                ret.put("success", true);
+                ret.put("data", b64);
+                ret.put("bytes", data.length);
+                call.resolve(ret);
+            } catch (Exception e) {
+                call.reject("SFTP 下载失败: " + e.getMessage());
+            } finally {
+                if (tmp != null) tmp.delete();
+                if (sftp != null) {
+                    try { sftp.close(); } catch (Exception ignored) {}
+                }
+            }
+        }).start();
+    }
+
+    @PluginMethod
     public void disconnect(PluginCall call) {
         try {
             if (ssh != null && ssh.isConnected()) ssh.disconnect();
