@@ -54,40 +54,13 @@ public class C3SshPlugin extends Plugin {
 
         new Thread(() -> {
             try {
-                // 关键修复：Android 系统自带一个残缺的 "BC" provider（缺 EC/X25519），
-                // 且 Security.addProvider 遇同名会跳过，导致 SSHJ 用到残缺版，
-                // 报 "no such algorithm: EC for provider BC"。
-                // 方案：先移除系统残缺 "BC"，再注册完整 BouncyCastle，最后强制 SSHJ 用它。
-                boolean bcOk = false;
-                Exception bcEx = null;
-                try {
-                    java.security.Security.removeProvider("BC");
-                    java.security.Provider bc =
-                        new org.bouncycastle.jce.provider.BouncyCastleProvider();
-                    int pos = java.security.Security.addProvider(bc);
-                    java.security.Provider got = java.security.Security.getProvider("BC");
-                    if (got != null) {
-                        // 验证 EC 是否可用
-                        try {
-                            java.security.KeyFactory.getInstance("EC", got);
-                            net.schmizz.sshj.common.SecurityUtils.setSecurityProvider("BC");
-                            bcOk = true;
-                        } catch (Throwable ecErr) {
-                            bcEx = new Exception("完整BC注册后仍无EC: " + ecErr);
-                        }
-                    } else {
-                        bcEx = new Exception("addProvider 后仍无 BC (pos=" + pos + ")");
-                    }
-                } catch (Throwable t) {
-                    bcEx = new Exception(t);
-                }
-                // 兜底：让 SSHJ 自行注册
-                if (!bcOk) {
-                    try {
-                        net.schmizz.sshj.common.SecurityUtils
-                            .registerSecurityProvider("org.bouncycastle.jce.provider.BouncyCastleProvider");
-                    } catch (Throwable ignored) {}
-                }
+                // 关键修复（Android 通用做法）：
+                // 不再使用 BouncyCastle（Android 系统自带的 org.bouncycastle 是残缺版，
+                // 且与打包的同名类冲突，导致 "no such algorithm: EC for provider BC"）。
+                // 直接关闭 SSHJ 对 BouncyCastle 的注册，改用 Android 系统默认 JCE provider
+                // （Conscrypt / AndroidOpenSSL），它对 ECDH/EC 支持完善。
+                net.schmizz.sshj.common.SecurityUtils.setRegisterBouncyCastle(false);
+                net.schmizz.sshj.common.SecurityUtils.setSecurityProvider(null);
 
                 // 构造 DefaultConfig，指定 KEX 列表（ECDH + 纯 DH，尽量兼容）
                 DefaultConfig cfg = new DefaultConfig();
