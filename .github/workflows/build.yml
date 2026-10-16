@@ -2,8 +2,11 @@ name: Build APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ c3mirror ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -26,8 +29,22 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug --stacktrace --no-daemon
 
+      - name: Show APK path
+        run: find . -name "*.apk" -type f
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: c3mirror-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload build outputs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            app/build/reports/**
+            build/reports/**
+          if-no-files-found: ignore
