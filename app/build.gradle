@@ -28,16 +28,20 @@ android {
 
     packagingOptions {
         resources {
+            // Keep this list minimal and NEVER exclude META-INF/versions/**
+            // wholesale - historically that is exactly what deleted the
+            // BouncyCastle X25519/Ed25519 SPIs and produced
+            // "no such algorithm: X25519 for provider BC".
             excludes += [
                     'META-INF/DEPENDENCIES',
                     'META-INF/LICENSE*',
                     'META-INF/NOTICE*',
-                    'META-INF/*.MF',
+                    'META-INF/INDEX.LIST',
+                    // Duplicate OSGI manifests jar-to-jar (bcprov vs bcpkix).
+                    'META-INF/versions/**/OSGI-INF/MANIFEST.MF',
                     'META-INF/*.SF',
                     'META-INF/*.DSA',
-                    'META-INF/*.RSA',
-                    'META-INF/versions/**',
-                    'META-INF/INDEX.LIST'
+                    'META-INF/*.RSA'
             ]
         }
     }
@@ -54,6 +58,13 @@ dependencies {
     implementation 'org.slf4j:slf4j-simple:2.0.13'
     implementation 'com.github.mwiede:jsch:0.2.20'
 
-    implementation 'org.bouncycastle:bcprov-jdk18on:1.78.1'
-    implementation 'org.bouncycastle:bcpkix-jdk18on:1.78.1'
+    // BouncyCastle is NOT pulled from Maven: those artifacts are Java-9
+    // multi-release jars, and D8 (as used by AGP) does not implement
+    // multi-release lookup, so the JDK-8 *stub* classes win and X25519 /
+    // Ed25519 SPIs end up missing at runtime
+    //   -> "no such algorithm: X25519 for provider BC"
+    // app/libs/*.jar are the same artefacts with META-INF/versions/11/**
+    // hoisted to the jar root (stubs replaced by the real implementations).
+    // See tools/flatten_bc.py in this repo to regenerate them.
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
 }
