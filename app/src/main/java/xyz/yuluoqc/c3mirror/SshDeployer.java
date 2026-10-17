@@ -3,6 +3,13 @@ package xyz.yuluoqc.c3mirror;
 import android.content.Context;
 
 import net.schmizz.sshj.SSHClient;
+import net.schmizz.sshj.DefaultConfig;
+import net.schmizz.sshj.common.Factory;
+import net.schmizz.sshj.common.SecurityUtils;
+import net.schmizz.sshj.transport.kex.DHG14;
+import net.schmizz.sshj.transport.kex.DHGexSHA256;
+import net.schmizz.sshj.transport.kex.ECDHNistP;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import net.schmizz.sshj.common.IOUtils;
 import net.schmizz.sshj.connection.channel.direct.LocalPortForwarder;
 import net.schmizz.sshj.connection.channel.direct.Parameters;
@@ -66,12 +73,83 @@ public class SshDeployer {
         if (log != null) log.log(s);
     }
 
+
+    /**
+     * Make sure every crypto primitive sshj may ask for actually resolves.
+     *
+     * Two layers, deliberately redundant:
+     *   A) Register the BouncyCastle provider so the X25519 / Ed25519 SPIs
+     *      shipped in bcprov-jdk18on are reachable via "BC". Without this,
+     *      modern OpenSSH keys and curve25519-sha256 KEX blow up with
+     *      "no such algorithm: X25519 for provider BC".
+     *   B) Build a DefaultConfig whose KEX list avoids curve25519 entirely and
+     *      instead advertises the JDK-native (SunEC / SunJCE) groups:
+     *      ecdh-sha2-nistp256 / nistp384 / nistp521 + DH group14/group-exchange.
+     *      Those never touch the BC provider, so they work even if BC is
+     *      absent or broken on some ROM.
+     *
+     * Called once, before the very first SSHClient is constructed.
+     */
+    private static volatile boolean CRYPTO_READY = false;
+
+    /** Best-effort logger usable from static context (crypto bootstrap). */
+    private static void bootLog(String msg) {
+        System.err.println("[C3Mirror] " + msg);
+    }
+
+    private static synchronized void ensureCryptoProviders() {
+        if (CRYPTO_READY) return;
+        try {
+            if (java.security.Security.getProvider("BC") == null) {
+                java.security.Security.addProvider(new BouncyCastleProvider());
+            }
+            // sshj caches its provider choice in a static field - point it at BC
+            // explicitly so lookups like KeyAgreement.getInstance("X25519","BC")
+            // succeed instead of falling through to the platform provider.
+            if (!SecurityUtils.isBouncyCastleRegistered()) {
+                if (!SecurityUtils.registerSecurityProvider("BC")) {
+                    SecurityUtils.setSecurityProvider("BC");
+                }
+            }
+        } catch (Throwable t) {
+            // Non fatal: layer (B) below keeps us alive without BC.
+            bootLog("BC provider 注册警告: " + t);
+        }
+        CRYPTO_READY = true;
+    }
+
+    /**
+     * A config that prefers JDK-native key exchange, so a broken/incomplete
+     * BouncyCastle can never stop us from negotiating a session.
+     */
+    private static DefaultConfig safeConfig() {
+        DefaultConfig cfg = new DefaultConfig();
+        try {
+            // NOTE: build the list explicitly - a generic ARRAY
+            // (new Factory.Named<KeyExchange>[]{...}) is a javac error
+            // ("generic array creation"). Verified against sshj 0.38.0.
+            java.util.List<Factory.Named<net.schmizz.sshj.transport.kex.KeyExchange>> kex =
+                    new java.util.ArrayList<Factory.Named<net.schmizz.sshj.transport.kex.KeyExchange>>();
+            kex.add(new ECDHNistP.Factory521());
+            kex.add(new ECDHNistP.Factory384());
+            kex.add(new ECDHNistP.Factory256());
+            kex.add(new DHGexSHA256.Factory());
+            kex.add(new DHG14.Factory());
+            cfg.setKeyExchangeFactories(kex);
+        } catch (Throwable t) {
+            // If for any reason we cannot override, fall back to the defaults.
+            bootLog("KEX 配置回退到默认: " + t);
+        }
+        return cfg;
+    }
+
     private static boolean blank(String s) {
         return s == null || s.trim().isEmpty();
     }
 
     public void connect() throws Exception {
-        SSHClient c = new SSHClient();
+        ensureCryptoProviders();
+        SSHClient c = new SSHClient(safeConfig());
         c.addHostKeyVerifier(new PromiscuousVerifier());
         c.setConnectTimeout(8000);
         c.setTimeout(10000);
