@@ -1,94 +1,112 @@
 # -*- coding: utf-8 -*-
 """
-Flatten BouncyCastle's multi-release jar CORRECTLY.
+Flatten BouncyCastle multi-release jars - CORRECTLY, all version tiers.
 
-Previous attempt appended the versions/11 classes after already writing the
-same paths from the root -> duplicate zip entries. D8/zip readers take the
-FIRST entry, so the JDK-8 stub would still win. This version builds an ordered
-name->bytes map (versions/11 wins) and writes each path exactly once.
+Discovery that motivated v3: bcprov 1.78/1.79 also carries
+    META-INF/versions/15/  (Ed25519/X25519 KeyFactory + KeyPairGenerator SPIs)
+    META-INF/versions/9/module-info.class
+The previous script only hoisted versions/11, leaving:
+  * versions/15 classes unreachable from dex (same bug, different tier), and
+  * versions/9/module-info.class, which D8 chokes on ("module-info.class
+    is not supported") and which also collided with the packagingOptions glob.
+
+v3 walks EVERY META-INF/versions/<N>/ tier, hoists its .class files to the jar
+root and drops the whole META-INF/versions tree (plus module-info) entirely.
+Higher N wins when two tiers define the same class.
 """
 import os, zipfile
 
 LIBS = '/root/libs'
 OUT = '/root/prebuilt_bc'
-VR = 'META-INF/versions/11/'
+VR = 'META-INF/versions/'
 
 
 def flatten(src, dst):
     if not os.path.exists(src):
         print('MISSING ' + src)
-        return
+        return None
     os.makedirs(OUT, exist_ok=True)
     zin = zipfile.ZipFile(src, 'r')
+    names = zin.namelist()
 
-    entries = {}   # name -> (is_from_versions11, bytes)
-    for n in zin.namelist():
+    # ---- 1) gather every versioned class, keyed by its real FQCN ----------
+    #    parse the tier number so a higher tier overrides a lower one
+    hoist = {}                      # target_path -> (tier, source_entry)
+    def tier_of(n):
+        rest = n[len(VR):]                       # "11/org/..." or "9/module-info.class"
+        head = rest.split('/', 1)[0]
+        try:
+            return int(head)
+        except ValueError:
+            return 0
+
+    for n in names:
+        if not n.startswith(VR) or not n.endswith('.class'):
+            continue
+        tier = tier_of(n)
+        target = n[len(VR):]
+        # strip the leading "<tier>/"
+        target = target.split('/', 1)[1] if '/' in target else target
+        if 'module-info' in target:
+            continue                             # dropped entirely (D8 ban)
+        prev = hoist.get(target)
+        if prev is None or tier > prev[0]:
+            hoist[target] = (tier, n)
+
+    # ---- 2) write the jar: root files first, hoisted classes replace stubs
+    zout = zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED)
+    seen = set()
+
+    for n in names:
         if n.endswith('/'):
             continue
-        up = n.upper()
-        if up.startswith('META-INF/SCRIPTS') or up.endswith(('.SF', '.DSA', '.RSA')):
-            continue                      # signing material - drop, we resigned
         if n.startswith(VR):
-            continue                      # handled in pass 2
-        entries[n] = (False, None)
-
-    # pass 2: hoist versions/11 classes; they must REPLACE the root stub
-    hoisted = overridden = added = 0
-    for n in zin.namelist():
-        if not n.startswith(VR) or not n.endswith('.class'):
-            continue
-        target = n[len(VR):]
-        if target in entries:
-            overridden += 1
-        else:
-            added += 1
-        entries[target] = (True, None)
-        hoisted += 1
-
-    zout = zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED)
-    dup_guard = set()
-    # root entries we must NOT emit where a versions/11 override exists
-    override_targets = set()
-    for n in zin.namelist():
-        if n.startswith(VR) and n.endswith('.class'):
-            override_targets.add(n[len(VR):])
-
-    # 1) emit everything that is NOT overridden, and NOT the versions tree
-    for n in zin.namelist():
-        if n.endswith('/') or n.startswith(VR):
             continue
         up = n.upper()
-        if up.startswith('META-INF/SCRIPTS') or up.endswith(('.SF', '.DSA', '.RSA')):
+        if up.endswith(('.SF', '.DSA', '.RSA')):
             continue
-        if n in override_targets:
-            continue                      # superseded by the hoisted class
-        if n in dup_guard:
+        if n == 'module-info.class' or n.endswith('/module-info.class'):
             continue
-        dup_guard.add(n)
+        if n in hoist:
+            continue                             # superseded, written in pass 2
+        if n in seen:
+            continue
+        seen.add(n)
         zout.writestr(n, zin.read(n))
 
-    # 2) emit the hoisted (real) classes exactly once
-    for n in zin.namelist():
-        if not n.startswith(VR) or not n.endswith('.class'):
+    for target in sorted(hoist):
+        if target in seen:
             continue
-        target = n[len(VR):]
-        if target in dup_guard:
-            continue
-        dup_guard.add(target)
-        zout.writestr(target, zin.read(n))
+        seen.add(target)
+        zout.writestr(target, zin.read(hoist[target][1]))
 
     zout.close()
     zin.close()
-    print('%s -> %s (%d bytes) hoisted=%d overridden=%d added=%d total_entries=%d'
+
+    # ---- 3) verification ---------------------------------------------------
+    z = zipfile.ZipFile(dst)
+    vv = [x for x in z.namelist() if x.startswith(VR)]
+    mi = [x for x in z.namelist() if 'module-info' in x]
+    nm = z.namelist()
+    dup = [x for x in set(nm) if nm.count(x) > 1]
+    print('%-28s -> %-26s %8d B  hoisted=%-4d dup=%-3d versions_left=%d module_info=%d'
           % (os.path.basename(src), os.path.basename(dst),
-             os.path.getsize(dst), hoisted, overridden, added, len(dup_guard)))
+             os.path.getsize(dst), len(hoist), len(dup), len(vv), len(mi)))
+    for probe in ['org/bouncycastle/jcajce/provider/asymmetric/edec/KeyAgreementSpi$X25519.class',
+                  'org/bouncycastle/jcajce/provider/asymmetric/edec/KeyFactorySpi$X25519.class',
+                  'org/bouncycastle/jcajce/provider/asymmetric/edec/KeyPairGeneratorSpi$X25519.class']:
+        if probe in z.namelist():
+            print('      %-72s %d B' % (probe.rsplit('/', 1)[1], z.getinfo(probe).file_size))
+        else:
+            print('      MISSING ' + probe)
+    z.close()
     return dst
 
 
-for src, dst in [
+for s, d in [
     ('bcprov-jdk18on-1.78.1.jar', 'bcprov-jdk18on-1.79.jar'),
     ('bcpkix-jdk18on-1.78.1.jar', 'bcpkix-jdk18on-1.79.jar'),
     ('bcutil-jdk18on-1.78.1.jar', 'bcutil-jdk18on-1.79.jar'),
 ]:
-    flatten(os.path.join(LIBS, src), os.path.join(OUT, dst))
+    flatten(os.path.join(LIBS, s), os.path.join(OUT, d))
 print('DONE')
