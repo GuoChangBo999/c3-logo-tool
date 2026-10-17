@@ -54,9 +54,17 @@ dependencies {
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
 
     // SSH client (same lib as original app) + its deps
-    implementation 'com.hierynomus:sshj:0.38.0'
+    // sshj brings its own (multi-release!) BouncyCastle 1.75 transitively.
+    // That both duplicates resources and would undo our X25519 fix, so every
+    // org.bouncycastle module is excluded here - we ship the flattened copy
+    // from app/libs instead.
+    implementation('com.hierynomus:sshj:0.38.0') {
+        exclude group: 'org.bouncycastle'
+    }
     implementation 'org.slf4j:slf4j-simple:2.0.13'
-    implementation 'com.github.mwiede:jsch:0.2.20'
+    implementation('com.github.mwiede:jsch:0.2.20') {
+        exclude group: 'org.bouncycastle'
+    }
 
     // BouncyCastle is NOT pulled from Maven: those artifacts are Java-9
     // multi-release jars, and D8 (as used by AGP) does not implement
@@ -67,4 +75,10 @@ dependencies {
     // hoisted to the jar root (stubs replaced by the real implementations).
     // See tools/flatten_bc.py in this repo to regenerate them.
     implementation fileTree(dir: 'libs', include: ['*.jar'])
+}
+
+// Belt and braces: no matter which dependency tries to pull BouncyCastle,
+// it must never come from Maven (only app/libs/*.jar may provide it).
+configurations.all {
+    exclude group: 'org.bouncycastle'
 }
