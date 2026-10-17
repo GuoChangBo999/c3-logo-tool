@@ -97,17 +97,44 @@ public class MirrorActivity extends AppCompatActivity {
                 default:
                     return true;
             }
-            int x = (int) ev.getX();
-            int y = (int) ev.getY();
+            float x = ev.getX();
+            float y = ev.getY();
             int vw = surfaceView.getWidth();
             int vh = surfaceView.getHeight();
             if (vw <= 0 || vh <= 0) return true;
+
+            // The picture is letterboxed (aspect preserved), so map against the
+            // actual video rect. Anything outside it is a miss - swallow it.
+            float[] r = videoRect(vw, vh);
+            float rx = r[0], ry = r[1], rw = r[2], rh = r[3];
+            if (x < rx || x > rx + rw || y < ry || y > ry + rh) return true;
+
             // map view coords -> source frame coords
-            int sx = clamp((int) (x * (float) SRC_W / vw), 0, SRC_W - 1);
-            int sy = clamp((int) (y * (float) SRC_H / vh), 0, SRC_H - 1);
+            int sx = clamp((int) ((x - rx) * (float) SRC_W / rw), 0, SRC_W - 1);
+            int sy = clamp((int) ((y - ry) * (float) SRC_H / rh), 0, SRC_H - 1);
             client.sendTouchEvent(action, sx, sy, SRC_W, SRC_H);
             return true;
         });
+    }
+
+    /**
+     * Letterbox rect (x, y, w, h) of the video inside the view.
+     * Aspect is preserved; extra space becomes black bars.
+     */
+    static float[] videoRect(int viewW, int viewH) {
+        float videoAspect = (float) SRC_W / (float) SRC_H;
+        float viewAspect = (float) viewW / (float) viewH;
+        float w, h;
+        if (viewAspect > videoAspect) {
+            h = viewH;
+            w = h * videoAspect;
+        } else {
+            w = viewW;
+            h = w / videoAspect;
+        }
+        float x = (viewW - w) / 2f;
+        float y = (viewH - h) / 2f;
+        return new float[]{x, y, w, h};
     }
 
     private static int clamp(int v, int lo, int hi) {
