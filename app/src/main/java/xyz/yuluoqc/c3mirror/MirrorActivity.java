@@ -33,7 +33,7 @@ public class MirrorActivity extends AppCompatActivity {
     private final Handler ui = new Handler(Looper.getMainLooper());
     private volatile boolean ready = false;
 
-    private String host, user, pass;
+    private String host, user, pass, key, keypass;
     private int vPort, tPort;
     private boolean deploy;
 
@@ -49,6 +49,8 @@ public class MirrorActivity extends AppCompatActivity {
         host = getIntent().getStringExtra("host");
         user = getIntent().getStringExtra("user");
         pass = getIntent().getStringExtra("pass");
+        key = getIntent().getStringExtra("key");
+        keypass = getIntent().getStringExtra("keypass");
         vPort = getIntent().getIntExtra("vport", 5000);
         tPort = getIntent().getIntExtra("tport", 27184);
         deploy = getIntent().getBooleanExtra("deploy", true);
@@ -119,7 +121,7 @@ public class MirrorActivity extends AppCompatActivity {
     private void startPipeline() {
         new Thread(() -> {
             try {
-                ssh = new SshDeployer(this, host, user, pass, this::status);
+                ssh = new SshDeployer(this, host, user, pass, key, keypass, this::status);
                 status("SSH 连接 " + host + " ...");
                 ssh.connect();
 

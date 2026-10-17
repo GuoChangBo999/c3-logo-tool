@@ -3,7 +3,6 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true">
-
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -16,7 +15,6 @@
             android:text="C3 超级投屏"
             android:textSize="22sp"
             android:textStyle="bold" />
-
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -33,7 +31,6 @@
             android:hint="车机 IP"
             android:inputType="text"
             android:text="10.90.179.222" />
-
         <EditText
             android:id="@+id/etSshUser"
             android:layout_width="match_parent"
@@ -48,7 +45,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:hint="SSH 密码"
+            android:hint="SSH 密码（无密钥时使用）"
             android:inputType="textPassword"
             android:text="comma" />
 
@@ -57,7 +54,6 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:orientation="horizontal">
-
             <EditText
                 android:id="@+id/etVideoPort"
                 android:layout_width="0dp"
@@ -66,7 +62,6 @@
                 android:hint="视频端口"
                 android:inputType="number"
                 android:text="5000" />
-
             <EditText
                 android:id="@+id/etTouchPort"
                 android:layout_width="0dp"
@@ -77,6 +72,52 @@
                 android:inputType="number"
                 android:text="27184" />
         </LinearLayout>
+
+        <!-- ===== SSH key auth ===== -->
+        <CheckBox
+            android:id="@+id/cbUseKey"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="使用 SSH 私钥认证（优先于密码）" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <Button
+                android:id="@+id/btnPickKey"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="从文件选择私钥" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_vertical"
+                android:layout_marginStart="12dp"
+                android:alpha="0.6"
+                android:textSize="11sp"
+                android:text="支持 id_rsa / id_ed25519" />
+        </LinearLayout>
+
+        <EditText
+            android:id="@+id/etKey"
+            android:layout_width="match_parent"
+            android:layout_height="120dp"
+            android:layout_marginTop="4dp"
+            android:gravity="top|start"
+            android:hint="-----BEGIN OPENSSH PRIVATE KEY----- ...（粘贴私钥内容）"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:fontFamily="monospace"
+            android:textSize="10sp" />
+
+        <EditText
+            android:id="@+id/etKeyPass"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="私钥密码（passphrase，可留空）"
+            android:inputType="textPassword" />
 
         <CheckBox
             android:id="@+id/cbDeploy"
@@ -108,6 +149,5 @@
             android:fontFamily="monospace"
             android:textSize="11sp"
             android:text="" />
-
     </LinearLayout>
 </ScrollView>
