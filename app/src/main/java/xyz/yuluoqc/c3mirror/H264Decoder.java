@@ -34,6 +34,13 @@ public class H264Decoder {
         }
         MediaCodec c = MediaCodec.createDecoderByType("video/avc");
         c.configure(format, surface, null, 0);
+        // Let the decoder scale the frame to fill the Surface without cropping.
+        // Combined with MirrorActivity's letterbox touch mapping this keeps the
+        // car picture correct even though the phone is now portrait-locked.
+        try {
+            c.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
+        } catch (Exception ignored) {
+        }
         c.start();
         synchronized (lock) {
             codec = c;
