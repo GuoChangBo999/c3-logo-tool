@@ -96,3 +96,68 @@ App 会自动：
 
 > 提示：密钥内容会存在 App 私有 SharedPreferences 里（未加密）。车机本身默认密码可用，
 > 密钥主要用于你已给车机配置了公钥的场景。
+
+---
+
+## 竖屏 & X25519 修复（build-5）
+
+### 1. App 改为竖屏
+`AndroidManifest.xml` 里两个 Activity 的 `screenOrientation` 从 `landscape`
+改为 `portrait`。因为车机画面是 1024x512（2:1 横屏），竖屏直显会被严重拉伸，
+所以 `MirrorActivity` 里补了两件事：
+
+* `H264Decoder` 调用 `setVideoScalingMode(VIDEO_SCALING_MODE_SCALE_TO_FIT)`，
+  让 MediaCodec 自适应 Surface；
+* `MirrorActivity.videoRect()` 计算 letterbox 后的真实画面矩形，触摸坐标按该
+  矩形映射（而非整个 View），确保点击落点与所见一致。
+
+### 2. `no such algorithm: X25519 for provider BC` 的真正根因
+关键结论：**不是 BC 版本太旧，而是 BouncyCastle 的 Java-9 多版本 jar 在
+Android 上失效。**
+
+`bcprov-jdk18on` 的结构是：
+
+```
+org/bouncycastle/jcajce/provider/asymmetric/edec/KeyAgreementSpi$X25519.class      <- 303B  JDK8 “桩”
+META-INF/versions/11/org/bouncycastle/.../edec/KeyAgreementSpi$X25519.class        <- 322B  真实现
+META-INF/versions/11/org/bouncycastle/.../edec/KeyAgreementSpi.class               <- 8932B 真实现
+org/bouncycastle/.../edec/KeyAgreementSpi.class                                    <- 6755B JDK8 版
+```
+
+桌面 JDK / ART 之外的场景会按 `META-INF/versions/11/` 覆盖查找；但 **Android 的
+D8/R8 不实现 multi-release 语义**，所以只有根目录那份进 dex —— 即 JDK8 版。
+再叠加早先 `packagingOptions` 把 `META-INF/versions/**` 整体排除，X25519 相关类
+就彻底没了。实测 build-4 的 dex 里 `KeyAgreementSpi$X25519` 出现次数为 **0**。
+
+### 3. 修复方式：把多版本 jar “拍平”
+`tools/flatten_bc.py` 读取原始 bcprov/bcpkix/bcutil，把
+`META-INF/versions/11/**` 下的 class **提升到 jar 根目录并覆盖同名桩类**，
+同时丢弃 `versions/` 树（顺带消灭了之前 `DuplicateRelativeFileException`
+的 OSGI manifest 冲突）。
+
+结果：`app/libs/bcprov-jdk18on-1.79.jar` 里 `KeyAgreementSpi$X25519.class`
+= 322B（真实现）、`KeyAgreementSpi.class` = 8932B（真实现），且**零重复条目**。
+
+验证（本地 JDK 直接跑 provider 查询）：
+
+```
+OK   X25519 -> X25519
+OK   X448   -> X448
+OK   XDH    -> XDH
+OK   Ed25519-> Ed25519
+```
+
+`build.gradle` 因此不再从 Maven 拉 BC，而是 `fileTree(dir: 'libs')`，
+`packagingOptions` 也收窄为只排除 `META-INF/versions/**/OSGI-INF/MANIFEST.MF`。
+
+### 4. 双保险：KEX 不依赖 BC 也能连
+即便某个 ROM 上 BC 仍不可用，`SshDeployer` 现在也：
+
+* 启动时 `Security.addProvider(new BouncyCastleProvider())` 并
+  `SecurityUtils.registerSecurityProvider("BC")`；
+* 用自定义 `DefaultConfig` 把 KEX 固定为 JDK 原生组
+  （`ecdh-sha2-nistp521/384/256` + `diffie-hellman-group14` + `group-exchange-sha256`），
+  完全绕开 curve25519。
+
+两项都做过 javac 预检（含运行验证），确保不会再出现
+`generic array creation` 之类的编译期意外。
